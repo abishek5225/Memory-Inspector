@@ -4,14 +4,22 @@ This program shows you what data actually looks like inside your computer's
 memory. It's like `hexdump -C` but written in x86-64 assembly from scratch.
 
 ```
-=== MEMORY INSPECTOR ===
-Learn x86-64 Assembly by Visualizing RAM
-
-Format: [ADDRESS] | [HEX BYTES] | [ASCII]
------------------------------------------------
-
---- 'number' (8 bytes) ---
+=== Memory Inspector ===
+--- num1 ---
 0x0000000000402000 | 01 EF CD AB 78 56 34 12  | ....xV4.
+--- num2 ---
+0x0000000000402008 | BE BA FE CA EF BE AD DE  | ........
+--- str1 ---
+0x0000000000402010 | 48 65 6C 6C 6F 21 00     | Hello!.
+--- raw ---
+0x0000000000402017 | 41 2A FF 00 AA 4D        | A*...M
+--- pad ---
+0x000000000040201D | CC CC CC CC              | ....
+--- full .data ---
+0x0000000000402000 | 01 EF CD AB 78 56 34 12  | ....xV4.
+0x0000000000402008 | BE BA FE CA EF BE AD DE  | ........
+0x0000000000402010 | 48 65 6C 6C 6F 21 00 41  | Hello!.A
+...
 ```
 
 ---
@@ -130,49 +138,48 @@ will break!
 ### The `.data` Section — Our Test Data
 
 ```asm
-number   dq 0x12345678ABCDEF01   ; 8 bytes
-another  dq 0xDEADBEEFCAFEBABE   ; 8 bytes, sits right after
-greeting db "Hello!", 0          ; 7 bytes (6 chars + null)
-rawbytes db 0x41, 42, 0xFF, ...  ; 6 raw bytes
-padding  times 4 db 0xCC        ; 4 bytes of 0xCC
+num1     dq 0x12345678ABCDEF01   ; 8 bytes
+num2     dq 0xDEADBEEFCAFEBABE   ; 8 bytes, sits right after
+str1     db "Hello!", 0          ; 7 bytes (6 chars + null)
+raw      db 0x41, 42, 0xFF, ...  ; 6 raw bytes
+pad      times 4 db 0xCC         ; 4 bytes of 0xCC
 ```
 
-Labels (`number`, `greeting`, etc.) are the **addresses** where these
-values start in RAM. When we dump `number`, we're reading 8 bytes
+Labels (`num1`, `str1`, etc.) are the **addresses** where these
+values start in RAM. When we dump `num1`, we're reading 8 bytes
 starting at that address.
 
-### The `.text` Section — Our Code
+### The Functions
 
-**`_start`** — the entry point (like `main()` in C). It calls `puts`
-to print labels, then calls `hexdump` for each variable to show its
-memory.
+**`_start`** — the entry point (like `main()` in C). Prints labels
+and calls `dump_bytes` for each variable.
 
-**`puts`** — prints a string by:
-1. Counting bytes until it finds `0` (the null terminator)
-2. Calling `write(1, string, count)`
+**`emit`** — prints a single character. Saves `rcx` because
+`syscall` destroys it. Everything else builds on this.
 
-**`puthexbyte`** — prints one byte as 2 hex digits + space:
-1. Takes the byte (e.g., `0xAB`)
-2. Shifts right by 4 to get the **high nibble** (`0xA`)
-3. Masks with `0x0F` to get the **low nibble** (`0xB`)
-4. Uses each nibble as an index into `"0123456789ABCDEF"`
-5. Writes the 3 characters: e.g., `"AB "`
+**`print_str`** — counts bytes until `0` (null terminator), then
+calls `write(1, string, count)`.
 
-**`putaddr`** — prints a 64-bit address as `0xXXXXXXXXXXXXXXXX` by
-rotating 4 bits at a time and converting each to a hex character.
+**`print_hex_byte`** — prints one byte as 2 hex digits:
+1. Saves byte, gets **high nibble** (`AL >> 4`)
+2. Looks up `hexchars[nibble]` via `xlatb`, prints it
+3. Restores byte, gets **low nibble** (`AL & 0x0F`)
+4. Looks up, prints it
 
-**`hexdump`** — the main worker. Prints one row at a time:
+**`print_addr`** — prints 16 hex digits by repeatedly shifting
+the top 4 bits down and converting each to a hex char.
+
+**`dump_bytes`** — the main worker. Loops through memory 8 bytes
+at a time, printing each row as:
 ```
-0xADDRESS | XX XX XX XX XX XX XX XX | .......?
+ADDRESS | XX XX XX XX XX XX XX XX | ........
 ```
-- Shows address, 8 hex bytes (padded with spaces for last row),
-  ASCII representation (`.` for non-printable)
 
 ---
 
 ## Understanding the Output
 
-### Example 1: The `number` Variable
+### Example 1: `num1`
 
 ```
 0x0000000000402000 | 01 EF CD AB 78 56 34 12  | ....xV4.
@@ -193,10 +200,10 @@ Memory: 01 EF CD AB 78 56 34 12
          ↑                        least significant byte first!
 ```
 
-### Example 2: The `greeting` String
+### Example 2: `str1` (the "Hello!" string)
 
 ```
-0x0000000000402010 | 48 65 6C 6C 6F 21 00     | Hello!. 
+0x0000000000402010 | 48 65 6C 6C 6F 21 00     | Hello!.
 ```
 
 Each character is one byte using its **ASCII code**:
@@ -211,14 +218,14 @@ string so `puts` knows where to stop.
 ### Example 3: Variables Sit Back-to-Back
 
 ```
-0x0000000000402000 | 01 EF CD AB 78 56 34 12  | ....xV4.    ← number (8 bytes)
-0x0000000000402008 | BE BA FE CA EF BE AD DE  | ........    ← another (8 bytes)
-0x0000000000402010 | 48 65 6C 6C 6F 21 00 41  | Hello!.A    ← greeting starts here
-0x0000000000402018 | 2A FF 00 AA 4D CC CC CC  | *...M..     ← rawbytes + padding
+0x0000000000402000 | 01 EF CD AB 78 56 34 12  | ....xV4.    ← num1 (8 bytes)
+0x0000000000402008 | BE BA FE CA EF BE AD DE  | ........    ← num2 (8 bytes)
+0x0000000000402010 | 48 65 6C 6C 6F 21 00 41  | Hello!.A    ← str1 starts here
+0x0000000000402018 | 2A FF 00 AA 4D CC CC CC  | *...M...    ← raw + pad
 ```
 
-Notice `another` starts at address `0x402008` — that's `number`'s
-address + 8 bytes. And `greeting` starts at `0x402010` — `another`'s
+Notice `num2` starts at address `0x402008` — that's `num1`'s
+address + 8 bytes. And `str1` starts at `0x402010` — `num2`'s
 address + 8 bytes. **No gaps!** Each variable follows the previous one
 immediately.
 
@@ -265,8 +272,8 @@ mov al, [number]     ; al  = first byte at 'number' (1 byte)
 Try changing the test data and see what happens:
 
 ```asm
-number   dq 0xCAFEBABE            ; smaller value — notice only 4 bytes change
-greeting db "Hi!", 0               ; shorter string
+num1     dq 0xCAFEBABE            ; smaller value — notice only 4 bytes change
+str1     db "Hi!", 0               ; shorter string
 ```
 
 Add your own variables:
@@ -278,39 +285,33 @@ mystring db "Wow, assembly!", 0
 
 Then add a dump call in `_start`:
 ```asm
-lea rdi, [rel mystring]            ; address
-mov rsi, 14                        ; length
-call hexdump
+lea rsi, [rel mystring]            ; address
+mov rcx, 14                        ; length
+call dump_bytes
 ```
+
+Don't forget: `rsi` = address, `rcx` = byte count.
 
 ---
 
 ## Why Did We Get an Infinite Loop?
 
-The original version of `putchar` did NOT save `rcx`:
+The first version of `emit` did NOT save `rcx`:
 
 ```asm
-putchar:
-    push rax
-    push rdi
-    push rsi
-    push rdx
-    mov [rel charbuf], dil
+emit:
+    mov [rel outb], dil
     mov rax, 1
     mov rdi, 1
-    lea rsi, [rel charbuf]
+    lea rsi, [rel outb]
     mov rdx, 1
     syscall                  ; ← this DESTROYS rcx!
-    pop rdx
-    pop rsi
-    pop rdi
-    pop rax
     ret
 ```
 
-`syscall` stores the return address in `rcx` (and flags in `r11`).
-When `putaddr` used `rcx` as a loop counter (16 hex digits), every
-call to `putchar` → `syscall` would reset `rcx`, and the loop would
+`syscall` saves the return address in `rcx` internally. When
+`print_addr` used `rcx` as a loop counter (16 hex digits), every
+call to `emit` → `syscall` would reset `rcx`, and the loop would
 never finish.
 
 Fix: save `rcx` before `syscall`, restore it after.
